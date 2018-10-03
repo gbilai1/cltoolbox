@@ -1,0 +1,298 @@
+#!/bin/ksh
+export PATH="/bin:/etc:/usr/sbin:/usr/ucb:/sbin:/home/itmasoft/bin:/usr/local/bin"
+unalias -a
+
+#---------------------------------------------------------------------
+#
+# Script copys files across nodes
+#
+# Copyright (c) 2018-2023 ITMA Software Associates.
+#
+#---------------------------------------------------------------------
+#
+# Change Activity Log:
+#
+# DD-MMM-YY  Description
+# ---------  ---------------------------------------------------------
+# 23-Oct-01  Original by ............................. ian Laing
+#
+#---------------------------------------------------------------------
+
+
+#---------------------------------------------------------------------
+# Display help
+#---------------------------------------------------------------------
+if [[ "$#" -eq 1 && ( "$1" = "-?" || "$1" = "--help" ) ]]; then
+
+pod2text --loose <<EoF #>
+
+=pod
+
+
+=head1 NAME
+
+clcp - copy a file
+
+
+=head1 SYNTAX
+
+clcp [ -Cluster 'aix_nodes' ] [/]file...
+
+
+=head1 DESCRIPTION
+
+This script allows you to copy files across an AIX cluster with one
+command.
+
+Simply enter the cluster to which to copy the files and the file
+name and it will run an scp/rcp command on all the members of the
+cluster.
+
+This command simply issues an scp/rcp irrespectively of whether the
+files are already in synch or the remote command is newer than the
+local version.
+
+clcp is not escpecially fast as it copies each file one-by-one
+to each target server. It is only really designed to be run for
+one or two files at a time.
+
+See L<cltar|cltar.htm> or L<clzip|clzip.htm> for better, and
+faster, ways of transferring large numbers of files (or whole
+directories) across a cluster.
+
+See L<clrefresh|clrefresh.htm> for a method of copying files to
+only those machines which already have a copy of the fileZ<>(s).
+
+
+=head1 OPTIONS
+
+=over 4
+
+=item [ -Cluster 'aix_nodes' ]
+
+The default cluster is the local one but can be overriden with a
+specific cluster name or a set of host names/addresses.
+
+See L<Working with clusters|clusters.htm> for a more detailed
+description.
+
+=item [/]file...
+
+File names can be entered individually on the command line or
+entered using AIX 'wild cards' for file name expansion.
+
+File names can also be entered in either absolute or relative
+format.
+
+=back
+
+
+=head1 VARIABLES
+
+=over 4
+
+=item CLSCP_OPTIONS
+
+Set this variable to be able to modify the scp command, for
+example include a -C for compression, or -o ConnectTimeout=5
+to set a timeout value.
+
+=back
+
+
+=head1 EXAMPLES
+
+=over 4
+
+=item 1
+
+  clcp ~itmasoft/.profile
+
+=item 2
+
+  clcp -Cluster local .pro*
+
+=item 3
+
+  clcp -C '10.1.0.65 10.3.0.65 10.3.0.75' .profile
+
+=item 4
+
+  clcp -c all /etc/hosts /etc/services /etc/*rc*
+
+=back
+
+
+=head1 SEE ALSO
+
+L<clbzip2|clbzip2.htm>, L<clrdist|clrdist.htm>, L<clrefresh|clrefresh.htm>, 
+L<clsyncdir|clsyncdir.htm>, L<cltar|cltar.htm>, L<clzip|clzip.htm>
+
+
+=head1 AUTHORS
+
+Copyright (c) 2018-2023 ITMA Software Associates.
+
+=cut
+
+EoF
+
+  MyRc=0
+  exit ${MyRc}
+fi
+
+
+#---------------------------------------------------------------------
+# Perform initialisation...
+#---------------------------------------------------------------------
+MyCmd=$(whence   $0)
+MyDir=$(dirname  ${MyCmd})
+MyCmd=$(basename $0)
+MyArgs="$*"
+PATH="${PATH}:${MyDir}"
+export PATH
+MyRc=0
+export SYSTEM_ALOG=${SYSTEM_ALOG:=/home/itmasoft/itmasoft.alog}
+MyUsage="${MyCmd} [ -Cluster \"aix_nodes\" ] file..."
+
+
+#---------------------------------------------------------------------
+# Am I still here???
+#---------------------------------------------------------------------
+if [[ ! -x "/home/itmasoft/bin/$(basename $0)" ]]; then
+  yell "CLT_9BO_TRC" "%0 %1: Execute permission denied!!!" "/home/itmasoft/bin/licence"
+  exit 251
+fi
+
+
+#---------------------------------------------------------------------
+# Display start-up message in the system log
+#---------------------------------------------------------------------
+alogger "${SYSTEM_ALOG}" "Running ${MyDir}/${MyCmd} ${MyArgs}"
+
+
+#---------------------------------------------------------------------
+# On exit display termination message into system log.
+#---------------------------------------------------------------------
+trap "terminate;" 0
+function terminate
+{
+  alogger "${SYSTEM_ALOG}" "Completed ${MyDir}/${MyCmd} in ${SECONDS} seconds, RC=${MyRc}"
+}
+
+trap "murder;" 1 2 3 15
+function murder
+{
+  yell "CLT_9BO_TRI" "%0 %1 is being murdered!!!" "${MyDir}/${MyCmd}"
+  MyRc=255
+  exit ${MyRc}
+}
+
+
+#---------------------------------------------------------------------
+# Parse out command parameters.
+#---------------------------------------------------------------------
+MyFiles=
+while [[ $# -gt 0 ]]
+ do
+   MyArg="$1"
+   typeset -l MyArg
+   case "${MyArg}" in
+    -c|-cluster) :
+       if [[ $# -lt 2 ]]; then
+         yell "CLT_9BO_TRN" "%0 Cluster name is missing!!!"
+         yell "CLT_9BO_TRR" "%0 %1 %2" "Usage:" "${MyUsage}"
+         MyRc=8
+         exit ${MyRc}
+       fi
+       MyCluster=$2
+       shift
+       ;;
+    -*) :
+       yell "CLT_9BO_TRW" "%0 Invalid option %1!!!" "$1"
+       yell "CLT_9BO_TS0" "%0 %1 %2" "Usage:" "${MyUsage}"
+       MyRc=8
+       exit ${MyRc}
+       ;;
+     *) :
+       MyFiles="${MyFiles} $1"
+       ;;
+   esac
+   shift
+ done
+
+
+#---------------------------------------------------------------------
+# Perform validation of directory/file names provided.
+#---------------------------------------------------------------------
+if [[ -z "${MyFiles}" ]]; then
+  yell "CLT_9BO_TS4" "%0 Enter the file name(s)!!!"
+  yell "CLT_9BO_TS8" "%0 %1 %2" "Usage:" "${MyUsage}"
+  MyRc=8
+  exit ${MyRc}
+fi
+
+
+#---------------------------------------------------------------------
+# Loop thru the supplied files and convert names into absolute form.
+#---------------------------------------------------------------------
+CpFiles=
+for FILE in ${MyFiles}
+ do
+   if [[ -d ${FILE} ]]; then
+     yell "CLT_9BO_TSD" "%0 Only files are supported, NOT directories, %1!!!" "${FILE}"
+     MyRc=8
+     exit ${MyRc}
+   fi
+   if [[ ! -f ${FILE} ]]; then
+     yell "CLT_9BO_TSH" "%0 Local file %1 does not exist!!!" "${FILE}"
+     MyRc=8
+     exit ${MyRc}
+   fi
+   case "${FILE}" in
+     /*) ;;
+     *)  FILE="$(pwd)/${FILE}";;
+   esac
+   CpFiles="${CpFiles} ${FILE}"
+ done
+MyFiles="${CpFiles}"
+
+
+#---------------------------------------------------------------------
+# Perform validation of cluster name...
+#---------------------------------------------------------------------
+MyCluster=$(clconvert ${MyCluster})
+if [[ "${MyCluster}" = "" ]]; then
+  yell "CLT_9BO_TSL" "%0 Cluster name(s) resolve to nothing!!!"
+  MyRc=8
+  exit ${MyRc}
+fi
+
+clalive ${MyCluster}
+if [[ $? -ne 0 ]]; then
+  MyRc=8
+  exit ${MyRc}
+fi
+
+
+#---------------------------------------------------------------------
+# Loop thru the cluster nodes copying the files.
+#---------------------------------------------------------------------
+for FILE in ${MyFiles}
+ do
+   echo
+   echo "[Copying ${FILE}]"
+   for NODE in ${MyCluster}
+    do
+      if [[ "$(hostname)" == "${NODE}" ]]; then continue; fi
+      echo
+      echo "${NODE}:"
+      clscp ${CLSCP_OPTIONS} -p ${FILE} ${NODE}:${FILE}
+      (( MyRc = MyRc + $? ))
+    done
+ done
+echo
+
+tell "CLT_9BO_TSQ" "%0 %1 %2 completed in %3 seconds, RC=%4" "${MyCmd}" "${MyArgs}" "${SECONDS}" "${MyRc}"
+
+exit ${MyRc}
