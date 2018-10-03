@@ -1,0 +1,62 @@
+#!/bin/ksh
+export PATH="/bin:/etc:/usr/sbin:/usr/ucb:/sbin:/home/itmasoft/bin:/usr/local/bin"
+unalias -a
+
+#---------------------------------------------------------------------
+#
+# Script checks cluster members are "alive" to ping.
+#
+# Copyright (c) 2018-2023 ITMA Software Associates.
+#
+#---------------------------------------------------------------------
+#
+# Change Activity Log:
+#
+# DD-MMM-YY  Description
+# ---------  ---------------------------------------------------------
+# 16-Sep-02  Original by ............................. ian Laing
+#
+#---------------------------------------------------------------------
+
+
+#---------------------------------------------------------------------
+# Perform initialisation...
+#---------------------------------------------------------------------
+MyRc=0
+
+
+#---------------------------------------------------------------------
+# Am I still here???
+#---------------------------------------------------------------------
+if [[ ! -x "/home/itmasoft/bin/$(basename $0)" ]]; then
+  yell "CLT_9BO_UUF" "%0 %1: Execute permission denied!!!" "/home/itmasoft/bin/licence"
+  exit 251
+fi
+
+
+#---------------------------------------------------------------------
+# Perform validation of cluster name...
+#---------------------------------------------------------------------
+if [[ $# -eq 0 ]]; then
+  yell "CLT_9BO_UUI" "%0 Node names must be supplied!!!"
+  MyRc=8
+  exit ${MyRc}
+fi
+
+
+#---------------------------------------------------------------------
+# Check each node in turn...
+#---------------------------------------------------------------------
+for NODE in $*
+ do
+   ping -c 1 $NODE >/dev/null 2>&1
+   if [[ $? -ne 0 ]]; then
+     ping -c 3 $NODE >/dev/null 2>&1
+     if [[ $? -ne 0 ]]; then
+       yell "CLT_9BO_UUO" "%0 Node %1 is not responding to ping!!!" "${NODE}"
+       (( MyRc = MyRc + 1))
+     fi
+   fi
+ done
+
+exit ${MyRc}
